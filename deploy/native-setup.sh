@@ -84,6 +84,25 @@ export ENABLE_CODE_INTERPRETER=true CODE_INTERPRETER_ENGINE=pyodide
 exec /workspace/venvs/webui/bin/open-webui serve --host 0.0.0.0 --port "\${WEBUI_PORT:-8080}"
 LAUNCH
 
+# --- privacy pipeline launchers (loopback only) ------------------------------
+if [ -d /workspace/stack/privacy-pipeline ]; then
+cat > /workspace/stack/run-sanitizer.sh <<'LAUNCH'
+#!/usr/bin/env bash
+set -a; . /workspace/stack/.env; set +a
+cd /workspace/stack/privacy-pipeline
+export HF_HOME=/workspace/hf-cache
+exec /workspace/venvs/pipeline/bin/uvicorn sanitizer:app --host 127.0.0.1 --port 8091
+LAUNCH
+cat > /workspace/stack/run-pipeline.sh <<'LAUNCH'
+#!/usr/bin/env bash
+set -a; . /workspace/stack/.env; set +a
+cd /workspace/stack/privacy-pipeline
+export HF_HOME=/workspace/hf-cache
+exec /workspace/venvs/pipeline/bin/uvicorn pipeline:app --host 127.0.0.1 --port 8092
+LAUNCH
+chmod +x /workspace/stack/run-sanitizer.sh /workspace/stack/run-pipeline.sh
+fi
+
 # --- pdf-renderer launcher (internal only: 127.0.0.1) ------------------------
 cat > /workspace/stack/run-pdf-renderer.sh <<'LAUNCH'
 #!/usr/bin/env bash
@@ -109,5 +128,12 @@ sup() {  # sup <name> <script>
 sup vllm /workspace/stack/run-vllm.sh
 sup open-webui /workspace/stack/run-webui.sh
 sup pdf-renderer /workspace/stack/run-pdf-renderer.sh
+if [ -x /workspace/stack/run-sanitizer.sh ]; then
+  sup sanitizer /workspace/stack/run-sanitizer.sh
+  sup pipeline /workspace/stack/run-pipeline.sh
+fi
+if [ -x /workspace/stack/run-qdrant.sh ]; then
+  sup qdrant /workspace/stack/run-qdrant.sh
+fi
 
 echo "started. logs: /workspace/logs/{vllm,open-webui}.log"
