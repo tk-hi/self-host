@@ -8,8 +8,8 @@ OFFER_ID="${1:?usage: 02-rent.sh <OFFER_ID>}"
 VASTAI="${VASTAI:-vastai}"
 DISK="${DISK:-100}"
 WEBUI_PORT="${WEBUI_PORT:-8080}"
-# A CUDA image with docker-in-docker available. The stack itself runs as
-# compose *inside* this instance, so the template must permit nested docker.
+# A CUDA base image. vast.ai container instances cannot nest docker, so the
+# stack is deployed natively by 03-deploy.sh (see deploy/native-setup.sh).
 IMAGE="${IMAGE:-vastai/base-image:cuda-12.4.1-auto}"
 
 echo "Renting offer ${OFFER_ID}: ${DISK}GB disk, publishing only ${WEBUI_PORT}"

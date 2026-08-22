@@ -9,7 +9,7 @@ name: selfhost-llm
 
 services:
   vllm:
-    image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:qwen38}
     container_name: vllm
     restart: unless-stopped
     # Shared memory: vLLM's workers need far more than the 64MB default.
@@ -45,7 +45,8 @@ services:
       --gpu-memory-utilization ${GPU_MEM_UTIL:-0.92}
       --kv-cache-dtype ${KV_CACHE_DTYPE:-auto}
       --enable-auto-tool-choice
-      --tool-call-parser ${TOOL_PARSER:-hermes}
+      --tool-call-parser ${TOOL_PARSER:-qwen3_coder}
+      --reasoning-parser ${REASONING_PARSER:-qwen3}
       --enable-prefix-caching
       ${EXTRA_VLLM_ARGS:-}
     healthcheck:

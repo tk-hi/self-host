@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Step 3 — push the compose stack to the instance and start it.
+# Step 3 — push the stack to the instance and start it.
 #   ./03-deploy.sh <INSTANCE_ID>
 # Expects deploy/.env to exist locally (secrets live there, never in git).
+#
+# vast.ai container instances are unprivileged containers: no nested docker,
+# so the compose file cannot run there. This deploys the same topology
+# natively via deploy/native-setup.sh — vLLM pinned to 127.0.0.1:8000
+# (vast maps only 22 and ${WEBUI_PORT}, so it stays internal either way),
+# Open WebUI on 0.0.0.0:${WEBUI_PORT}. deploy/docker-compose.yml remains the
+# reference topology and works as-is on VM offers or any real docker host.
 set -euo pipefail
 
 : "${VAST_API_KEY:?export VAST_API_KEY first}"
@@ -18,40 +25,20 @@ TARGET="root@${SSH_HOST}"
 
 echo "==> ${TARGET}:${SSH_PORT}"
 
-# The vast base images ship docker but not always the compose plugin.
-ssh "${SSH_OPTS[@]}" "$TARGET" bash -s <<'REMOTE'
-set -euo pipefail
-mkdir -p /workspace/stack /workspace/hf-cache
-if ! docker compose version >/dev/null 2>&1; then
-  echo "installing docker compose plugin"
-  apt-get update -qq
-  apt-get install -y -qq docker-compose-plugin || {
-    mkdir -p /usr/local/lib/docker/cli-plugins
-    curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
-      -o /usr/local/lib/docker/cli-plugins/docker-compose
-    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-  }
-fi
-docker compose version
-nvidia-smi --query-gpu=name,memory.total --format=csv
-REMOTE
+ssh "${SSH_OPTS[@]}" "$TARGET" "mkdir -p /workspace/stack && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader"
 
-scp "${SCP_OPTS[@]}" "${HERE}/deploy/docker-compose.yml" "${HERE}/deploy/.env" "${TARGET}:/workspace/stack/"
+scp "${SCP_OPTS[@]}" "${HERE}/deploy/.env" "${HERE}/deploy/native-setup.sh" "${TARGET}:/workspace/stack/"
 
-ssh "${SSH_OPTS[@]}" "$TARGET" bash -s <<'REMOTE'
-set -euo pipefail
-cd /workspace/stack
-docker compose pull
-# Start vLLM first and let it download weights; open-webui waits on its health.
-docker compose up -d
-echo "--- containers ---"
-docker compose ps
-REMOTE
+# Installs uv + Python 3.12 venvs for vLLM and Open WebUI (idempotent), writes
+# the two launchers, and starts both under restart-loop supervisors.
+ssh "${SSH_OPTS[@]}" "$TARGET" "bash /workspace/stack/native-setup.sh"
 
 cat <<NOTE
 
-Started. The first boot downloads ~30GB, so vLLM will sit in 'health: starting'
-for a while — that is expected, not a failure. Follow it with:
+Started. The first boot downloads the model weights (tens of GB), so vLLM
+will not answer for a while — that is expected, not a failure. Follow it with:
 
   ./scripts/poll-ready.sh ${INSTANCE_ID}
+
+Logs on the instance: /workspace/logs/{vllm,open-webui}.log
 NOTE
