@@ -1,0 +1,105 @@
+# Self-hosted ChatGPT-style stack: vLLM (OpenAI-compatible) + Open WebUI.
+#
+# Topology on the rented vast.ai instance:
+#   open-webui  -> published on ${WEBUI_PORT} (the ONLY publicly mapped port)
+#   vllm        -> `expose`d only, reachable at http://vllm:8000 on the private
+#                  compose network. Never published to the host, so vast.ai has
+#                  no port to map and it stays internal.
+name: selfhost-llm
+
+services:
+  vllm:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+    container_name: vllm
+    restart: unless-stopped
+    # Shared memory: vLLM's workers need far more than the 64MB default.
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - VLLM_API_KEY=${VLLM_API_KEY}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - HF_HOME=/root/.cache/huggingface
+      # Faster weight downloads, but only if the image ships `hf_transfer` --
+      # huggingface_hub hard-errors when this is 1 and the package is missing.
+      # Set HF_TRANSFER=1 in .env once you have confirmed it is present.
+      - HF_HUB_ENABLE_HF_TRANSFER=${HF_TRANSFER:-0}
+    volumes:
+      # Weights live on the instance's big disk, not in the container layer,
+      # so `docker compose down` doesn't force a re-download.
+      - ${HF_CACHE_DIR:-/workspace/hf-cache}:/root/.cache/huggingface
+    expose:
+      - "8000"
+    networks: [llm]
+    command: >
+      --model ${MODEL_ID}
+      --served-model-name ${SERVED_MODEL_NAME}
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len ${MAX_MODEL_LEN:-65536}
+      --gpu-memory-utilization ${GPU_MEM_UTIL:-0.92}
+      --kv-cache-dtype ${KV_CACHE_DTYPE:-auto}
+      --enable-auto-tool-choice
+      --tool-call-parser ${TOOL_PARSER:-hermes}
+      --enable-prefix-caching
+      ${EXTRA_VLLM_ARGS:-}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"Authorization: Bearer $${VLLM_API_KEY}\" http://localhost:8000/v1/models || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 120
+      # First boot downloads ~30GB and builds CUDA graphs. Give it an hour
+      # before the healthcheck is allowed to mark the container unhealthy.
+      start_period: 3600s
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    depends_on:
+      vllm:
+        condition: service_healthy
+    ports:
+      - "0.0.0.0:${WEBUI_PORT:-8080}:8080"
+    environment:
+      # --- model backend: vLLM only ---
+      - ENABLE_OPENAI_API=true
+      - OPENAI_API_BASE_URL=http://vllm:8000/v1
+      - OPENAI_API_KEY=${VLLM_API_KEY}
+      - ENABLE_OLLAMA_API=false
+      # --- auth: first account to sign up becomes the admin ---
+      - WEBUI_AUTH=true
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+      - ENABLE_SIGNUP=${ENABLE_SIGNUP:-true}
+      # --- web search via Tavily ---
+      # Both the current and legacy names are set: Open WebUI renamed these
+      # around 0.5 and :main can be either side of the rename.
+      - ENABLE_WEB_SEARCH=true
+      - ENABLE_RAG_WEB_SEARCH=true
+      - WEB_SEARCH_ENGINE=tavily
+      - RAG_WEB_SEARCH_ENGINE=tavily
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - WEB_SEARCH_RESULT_COUNT=5
+      - RAG_WEB_SEARCH_RESULT_COUNT=5
+      - WEB_SEARCH_CONCURRENT_REQUESTS=4
+      - ENABLE_SEARCH_QUERY_GENERATION=true
+      # --- code interpreter (Pyodide, sandboxed in the browser) ---
+      - ENABLE_CODE_EXECUTION=true
+      - CODE_EXECUTION_ENGINE=pyodide
+      - ENABLE_CODE_INTERPRETER=true
+      - CODE_INTERPRETER_ENGINE=pyodide
+    volumes:
+      - open-webui:/app/backend/data
+    networks: [llm]
+
+networks:
+  llm:
+    driver: bridge
+
+volumes:
+  open-webui:
