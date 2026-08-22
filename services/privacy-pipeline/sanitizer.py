@@ -44,9 +44,12 @@ _db.execute("""CREATE TABLE IF NOT EXISTS maps (
 _db.commit()
 
 # ---------- layer 1: deterministic recognizers ----------
-RE_HKID = re.compile(r"\b[A-Z]{1,2}\d{6}\([0-9A]\)")
+RE_HKID = re.compile(r"\b[A-Za-z]{1,2}\s?\d{6}\s?\([0-9Aa]\)")
 RE_PHONE = re.compile(r"\+852[\s-]?\d{4}[\s-]?\d{4}|\b[569]\d{3}[\s-]\d{4}\b")
 RE_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+RE_EMAIL_OBF = re.compile(
+    r"\b[A-Za-z0-9._%+-]+\s*(?:\[at\]|\(at\)|\bat\b)\s*[A-Za-z0-9.-]+"
+    r"\s*(?:\[dot\]|\(dot\)|\bdot\b)\s*[A-Za-z]{2,}", re.I)
 RE_AMOUNT = re.compile(r"HK\$\s?[\d,]+(?:\.\d+)?[MKmk]?|\bHKD\s?[\d,]+\b")
 
 # ---------- layer 2 gazetteer: name POOLS (not the manifest) ----------
@@ -141,7 +144,8 @@ def sanitize(req: SanitizeReq):
     spans = {}  # original -> kind
 
     for regex, kind in ((RE_HKID, "HKID"), (RE_PHONE, "PHONE"),
-                        (RE_EMAIL, "EMAIL"), (RE_AMOUNT, "AMOUNT")):
+                        (RE_EMAIL, "EMAIL"), (RE_EMAIL_OBF, "EMAIL"),
+                        (RE_AMOUNT, "AMOUNT")):
         for m in regex.finditer(text):
             spans[m.group(0)] = kind
     layers = {"deterministic": len(spans)}
