@@ -135,18 +135,40 @@ def rehydrate(text, session_id):
 ORPHAN_RE = re.compile(r"\[(?:HKID|PHONE|EMAIL|AMOUNT|PERSON|ORG|MISC)_\d+\]")
 CITE_RE = re.compile(r"\[((?:CAND|CLI|PLC|MISC)-\d+)\]")
 
+def _judge_once(claim, chunk):
+    prompt = (f"SOURCE:\n{chunk[:8000]}\n\nCLAIM: {claim}\n\n"
+              "Does the source support the claim? Paraphrase and summary count "
+              "as supported; judge only the factual content (names, figures, "
+              "terms). Reply with exactly one word:\n"
+              "SUPPORTED - facts in the claim appear in the source\n"
+              "PARTIAL - core facts appear, some framing or minor detail does not\n"
+              "UNSUPPORTED - a fact is absent from or contradicted by the source")
+    out, _ = local_llm([{"role": "user", "content": prompt}], 20, 0.0)
+    up = out.strip().upper()
+    if "UNSUPPORTED" in up:
+        return 0.0
+    if "SUPPORTED" in up:
+        return 1.0
+    if "PARTIAL" in up:
+        return 0.85
+    nums = re.findall(r"[01](?:\.\d+)?", up)
+    return min(1.0, float(nums[-1])) if nums else None
+
+
 def faithfulness(claims_with_chunks):
-    scores = []
+    scores, cache = [], {}
     for claim, chunk in claims_with_chunks:
-        prompt = (f"SOURCE:\n{chunk[:1500]}\n\nCLAIM: {claim}\n\n"
-                  "Is the claim fully supported by the source? Answer with only "
-                  "a number 0.0-1.0.")
-        try:
-            out, _ = local_llm([{"role": "user", "content": prompt}], 10, 0.0)
-            m = re.search(r"[01](?:\.\d+)?", out)
-            scores.append(float(m.group(0)) if m else 0.0)
-        except Exception:
-            scores.append(0.0)
+        key = (claim, chunk[:80])
+        if key not in cache:
+            v = None
+            try:
+                v = _judge_once(claim, chunk)
+                if v is None:  # unparseable — one retry, then fail closed
+                    v = _judge_once(claim, chunk)
+            except Exception:
+                v = None
+            cache[key] = 0.0 if v is None else v
+        scores.append(cache[key])
     return scores
 
 # ---------- the sandwich ----------
@@ -227,9 +249,12 @@ def run_ask(question, session_id=None, mode="sandwich"):
         enriched, _ = local_llm([{"role": "user", "content":
             "Improve the DRAFT by replacing generic statements with specific "
             "figures from the CONTEXT where relevant. Every specific figure or "
-            "fact you add MUST be followed by its doc-id citation in square "
-            "brackets, e.g. [CLI-01]. Do not add any fact you cannot cite. "
-            "Keep the draft's structure.\n\nCONTEXT:\n" + context
+            "fact you add MUST be followed by the doc-id of the document that "
+            "fact literally appears in, in square brackets, e.g. [CLI-01]. "
+            "Cite counts or aggregates to EACH underlying record. Do not add "
+            "meta-commentary about document consistency, and do not add "
+            "comparisons the context does not state. Do not add any fact you "
+            "cannot cite. Keep the draft's structure.\n\nCONTEXT:\n" + context
             + "\n\nDRAFT:\n" + rh["text"]}], 2000)
         trace["timings"]["enrich"] = round(time.time() - t, 2)
         trace["hops"].append({"hop": "enrich", "diff_len":
@@ -239,10 +264,15 @@ def run_ask(question, session_id=None, mode="sandwich"):
         cited = CITE_RE.findall(enriched)
         chunk_by_id = {c["doc_id"]: c["text"] for c in chunks}
         claims = []
-        for sent in re.split(r"(?<=[.!?])\s+", enriched):
-            for cid in CITE_RE.findall(sent):
-                if cid in chunk_by_id:
-                    claims.append((sent, chunk_by_id[cid]))
+        for sent in re.split(r"(?<=[.!?])\s+|\n+", enriched):
+            sent = sent.strip(" >*-|")
+            if not sent or len(sent) > 500:
+                continue
+            cids = [c for c in CITE_RE.findall(sent) if c in chunk_by_id]
+            if cids:
+                # a sentence citing several docs is supported by their UNION
+                union = "\n---\n".join(chunk_by_id[c] for c in dict.fromkeys(cids))
+                claims.append((sent, union))
         t = time.time()
         scores = faithfulness(claims[:10])
         go = guard_output(question, enriched)
