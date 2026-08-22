@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+{% include "_base.css.j2" %}
+
+.workflow { page-break-before: always; }
+.workflow .code { font-size: 9pt; letter-spacing: 0.2em; color: #6a6a6a;
+                  margin-bottom: 1mm; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="rule"></div>
+  <h1>{{ meta.title }}</h1>
+  <div class="subtitle">{{ meta.subtitle }}</div>
+  <div class="client">{{ meta.client_name }}</div>
+  <div class="prepared">Prepared by {{ meta.prepared_by }}</div>
+  <div class="date">{{ meta.date }}</div>
+</div>
+
+{% for section in sections %}
+<div class="divider">
+  <div class="kicker">Section {{ loop.index }}</div>
+  <h2>{{ section.title }}</h2>
+  <div class="intro">
+    {% for p in section.intro_paragraphs %}<p>{{ p }}</p>{% endfor %}
+  </div>
+</div>
+
+{% for wf in section.workflows %}
+<div class="workflow">
+  <div class="code">{{ wf.code }}</div>
+  <h3>{{ wf.name }}</h3>
+  <div class="heading-rule"></div>
+
+  <h4>Today</h4>
+  {% for p in wf.today %}<p>{{ p }}</p>{% endfor %}
+
+  <h4>Transformed</h4>
+  {% for p in wf.transformed %}<p>{{ p }}</p>{% endfor %}
+</div>
+{% endfor %}
+{% endfor %}
+
+</body>
+</html>

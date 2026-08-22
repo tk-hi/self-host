@@ -28,6 +28,22 @@ if [ ! -x /workspace/venvs/webui/bin/open-webui ]; then
   uv pip install --python /workspace/venvs/webui/bin/python open-webui
 fi
 
+# --- pdf-renderer: WeasyPrint needs pango/cairo/gdk-pixbuf system libs ------
+# We are root inside the (unprivileged) container, so apt works. If a host
+# ever blocks apt, swap WeasyPrint for ReportLab in the service.
+if ! dpkg -s libpango-1.0-0 >/dev/null 2>&1; then
+  apt-get update -qq
+  apt-get install -y -qq libpango-1.0-0 libpangocairo-1.0-0 libpangoft2-1.0-0 \
+    libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info
+fi
+
+if [ ! -x /workspace/venvs/pdf/bin/uvicorn ]; then
+  uv venv --python 3.12 /workspace/venvs/pdf
+  uv pip install --python /workspace/venvs/pdf/bin/python \
+    -r /workspace/stack/pdf-renderer/requirements.txt
+fi
+mkdir -p /workspace/outputs/pdfs
+
 # --- vLLM launcher (internal only: 127.0.0.1) ------------------------------
 cat > /workspace/stack/run-vllm.sh <<LAUNCH
 #!/usr/bin/env bash
@@ -68,7 +84,15 @@ export ENABLE_CODE_INTERPRETER=true CODE_INTERPRETER_ENGINE=pyodide
 exec /workspace/venvs/webui/bin/open-webui serve --host 0.0.0.0 --port "\${WEBUI_PORT:-8080}"
 LAUNCH
 
-chmod +x /workspace/stack/run-vllm.sh /workspace/stack/run-webui.sh
+# --- pdf-renderer launcher (internal only: 127.0.0.1) ------------------------
+cat > /workspace/stack/run-pdf-renderer.sh <<'LAUNCH'
+#!/usr/bin/env bash
+cd /workspace/stack/pdf-renderer
+export PDF_OUTPUT_DIR=/workspace/outputs/pdfs
+exec /workspace/venvs/pdf/bin/uvicorn app:app --host 127.0.0.1 --port 8090
+LAUNCH
+
+chmod +x /workspace/stack/run-vllm.sh /workspace/stack/run-webui.sh /workspace/stack/run-pdf-renderer.sh
 
 # --- supervise with restart loops (no systemd in a container instance) ------
 sup() {  # sup <name> <script>
@@ -84,5 +108,6 @@ sup() {  # sup <name> <script>
 
 sup vllm /workspace/stack/run-vllm.sh
 sup open-webui /workspace/stack/run-webui.sh
+sup pdf-renderer /workspace/stack/run-pdf-renderer.sh
 
 echo "started. logs: /workspace/logs/{vllm,open-webui}.log"

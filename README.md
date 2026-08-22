@@ -114,6 +114,35 @@ Live numbers from the 2026-08-22 deployment search (verified DC hosts,
 
 Plus bandwidth; the ~29GB initial download is billed on some hosts.
 
+## PDF rendering (services/pdf-renderer)
+
+A loopback-only FastAPI microservice (`127.0.0.1:8090`) that renders
+structured JSON into typeset A4 PDFs via Jinja2 + WeasyPrint, with Source
+Serif 4 bundled (OFL) so no system fonts are needed. Two doc types:
+`workflow_atlas` (cover, per-section divider pages, one workflow per page)
+and `memo` (cover + flowing sections). Both share `templates/_base.css.j2` —
+cover, footer-with-confidentiality-line + page numbers on every page
+(CSS `@page` margin boxes), and accent-color rules. Adding a doc type means
+adding a template and one entry in `DOC_TEMPLATES`.
+
+```bash
+curl -s -X POST http://127.0.0.1:8090/render \
+  -H 'Content-Type: application/json' \
+  -d @services/pdf-renderer/sample-payload.json -o out.pdf
+```
+
+Rendered PDFs are also saved to `/workspace/outputs/pdfs/` and served back
+at `GET /files/{name}`. WeasyPrint's pango/cairo/gdk-pixbuf system libs are
+apt-installed by `deploy/native-setup.sh` (root inside the container, so apt
+works; if a host ever blocks it, swap WeasyPrint for ReportLab).
+
+`services/pdf-renderer/openwebui_tool.py` is an Open WebUI tool
+(`generate_pdf`) that POSTs to the service and uploads the result into Open
+WebUI's file storage so the chat reply carries a real download link. It
+needs an Open WebUI API key in its Valves (the tool uploads files on your
+behalf), and must be enabled for the model in the UI or per-chat via the
+tools (+) menu.
+
 ## Ending billing
 
 ```bash

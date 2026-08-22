@@ -14,7 +14,11 @@ for i in $(seq 1 180); do
   out=$(ssh "${SSH_OPTS[@]}" "root@${SSH_HOST}" bash -s <<'REMOTE'
 set -a; . /workspace/stack/.env; set +a
 if curl -fsS -m 5 -H "Authorization: Bearer ${VLLM_API_KEY}" http://127.0.0.1:8000/v1/models >/dev/null 2>&1; then
-  echo "READY"
+  if curl -fsS -m 5 http://127.0.0.1:8090/health >/dev/null 2>&1; then
+    echo "READY"
+  else
+    echo "vLLM ready; pdf-renderer /health not answering yet"
+  fi
 elif grep -qE "torch.OutOfMemoryError|CUDA error|EngineCore failed" /workspace/logs/vllm.log 2>/dev/null; then
   echo "FATAL"
   grep -E -m3 -B2 "OutOfMemoryError|CUDA error|EngineCore failed" /workspace/logs/vllm.log | tail -8

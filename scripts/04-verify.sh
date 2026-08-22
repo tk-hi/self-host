@@ -59,6 +59,14 @@ REMOTE
 
 echo
 echo "=============================================="
+echo "3.5/4  pdf-renderer health (loopback, over SSH)"
+echo "=============================================="
+ssh "${SSH_OPTS[@]}" "root@${SSH_HOST}" \
+  "curl -fsS http://127.0.0.1:8090/health"
+echo
+
+echo
+echo "=============================================="
 echo "4/4  Open WebUI reachable on the public port"
 echo "=============================================="
 curl -fsS -o /dev/null -w "  GET %{url_effective} -> %{http_code}\n" "${WEBUI_URL}/health" \
@@ -70,6 +78,11 @@ if curl -fsS --max-time 8 -o /dev/null "http://${PUB_IP}:8000/v1/models" 2>/dev/
   echo "  !! WARNING: vLLM answered on the public IP. It must bind 127.0.0.1 only."
 else
   echo "  OK: port 8000 is not publicly served."
+fi
+if curl -fsS --max-time 8 -o /dev/null "http://${PUB_IP}:8090/health" 2>/dev/null; then
+  echo "  !! WARNING: pdf-renderer answered on the public IP. It must bind 127.0.0.1 only."
+else
+  echo "  OK: port 8090 is not publicly served."
 fi
 
 cat <<NOTE

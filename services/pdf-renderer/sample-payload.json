@@ -1,0 +1,72 @@
+{
+  "doc_type": "workflow_atlas",
+  "meta": {
+    "title": "Operations Workflow Atlas",
+    "subtitle": "Current state and transformation blueprint",
+    "client_name": "Meridian Freight Ltd.",
+    "prepared_by": "Northwind Advisory",
+    "confidential_line": "Confidential — prepared for Meridian Freight Ltd. Do not distribute.",
+    "date": "22 August 2026",
+    "accent_color": "#1a5276"
+  },
+  "sections": [
+    {
+      "title": "Quote-to-Booking",
+      "intro_paragraphs": [
+        "How inbound freight enquiries become confirmed bookings, and where manual touchpoints slow the cycle."
+      ],
+      "workflows": [
+        {
+          "code": "QB-01",
+          "name": "Spot Quote Handling",
+          "today": [
+            "Enquiries arrive by email and are re-keyed into a spreadsheet. Rates are looked up manually across three carrier portals, and the quote is assembled in Word.",
+            "Median turnaround is four hours; roughly a fifth of enquiries go stale before a quote is sent."
+          ],
+          "transformed": [
+            "Enquiries are parsed automatically, rates are fetched via carrier APIs, and a draft quote is generated for one-click review.",
+            "Turnaround drops below fifteen minutes with an auditable trail per quote."
+          ]
+        },
+        {
+          "code": "QB-02",
+          "name": "Booking Confirmation",
+          "today": [
+            "Accepted quotes are confirmed by phone and rekeyed into the TMS, with occasional transcription errors surfacing at invoicing."
+          ],
+          "transformed": [
+            "Quote acceptance triggers TMS booking creation directly; the customer receives a confirmation with tracking references within a minute."
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Proof-of-Delivery to Invoice",
+      "intro_paragraphs": [
+        "The paper trail between a completed delivery and cash in the bank."
+      ],
+      "workflows": [
+        {
+          "code": "PI-01",
+          "name": "POD Collection",
+          "today": [
+            "Drivers photograph paper PODs; back office chases missing ones weekly, delaying invoicing by an average of six days."
+          ],
+          "transformed": [
+            "Digital signature capture at handover files the POD instantly against the shipment record; exceptions are flagged the same day."
+          ]
+        },
+        {
+          "code": "PI-02",
+          "name": "Invoice Assembly",
+          "today": [
+            "Invoices are compiled monthly from the TMS plus two side spreadsheets for surcharges, then checked line-by-line by hand."
+          ],
+          "transformed": [
+            "Surcharges are captured at source and invoices are drafted continuously, cutting month-end close from five days to one."
+          ]
+        }
+      ]
+    }
+  ]
+}

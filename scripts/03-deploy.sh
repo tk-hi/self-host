@@ -28,6 +28,7 @@ echo "==> ${TARGET}:${SSH_PORT}"
 ssh "${SSH_OPTS[@]}" "$TARGET" "mkdir -p /workspace/stack && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader"
 
 scp "${SCP_OPTS[@]}" "${HERE}/deploy/.env" "${HERE}/deploy/native-setup.sh" "${TARGET}:/workspace/stack/"
+scp -r "${SCP_OPTS[@]}" "${HERE}/services/pdf-renderer" "${TARGET}:/workspace/stack/"
 
 # Installs uv + Python 3.12 venvs for vLLM and Open WebUI (idempotent), writes
 # the two launchers, and starts both under restart-loop supervisors.
