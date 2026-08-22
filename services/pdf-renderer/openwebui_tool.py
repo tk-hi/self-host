@@ -3,7 +3,7 @@ title: PDF Generator
 author: self-host
 description: Render a structured workflow atlas or memo into a typeset A4 PDF and return a download link.
 required_open_webui_version: 0.5.0
-version: 0.1.0
+version: 0.2.0
 license: MIT
 """
 
@@ -83,10 +83,13 @@ class Tools:
 
         try:
             up = requests.post(
-                f"{self.valves.OPENWEBUI_URL}/api/v1/files/",
+                # process=false skips RAG extraction/embedding — this is a finished
+                # artifact to serve back, and processing large PDFs can hang for
+                # minutes and time the upload out.
+                f"{self.valves.OPENWEBUI_URL}/api/v1/files/?process=false",
                 headers={"Authorization": f"Bearer {self.valves.OPENWEBUI_API_KEY}"},
                 files={"file": (filename, r.content, "application/pdf")},
-                timeout=60,
+                timeout=300,
             )
             up.raise_for_status()
             file_id = up.json()["id"]
