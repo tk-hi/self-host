@@ -82,6 +82,7 @@ recommends for this family.
 | `a100-80gb.env` | A100 80GB | `Qwen/Qwen3.8-27B-FP8` | Official block-scaled FP8 (~29GiB), 64k context, vision kept. Best option. |
 | `rtx4090-24gb.env` | RTX 4090 24GB | `cyankiwi/Qwen3.8-27B-AWQ-INT4` | ~21GB AWQ 4-bit + fp8 KV + `--language-model-only`. Fits 64k with a thin margin. |
 | `rtx4090-24gb-safe.env` | RTX 4090 24GB | `Qwen/Qwen3.5-27B-GPTQ-Int4` | Official quant of the previous-gen 27B (~17GB). Comfortable fallback. |
+| `rtx5090-32gb.env` | RTX 5090 32GB | `philbert440/Qwen3.8-27B-…-W4A16-AWQ` | Blackwell. Same 18GiB AWQ weights as the 4090 uncensored profile, but 32GB lifts context to 96k (`MAX_MODEL_LEN=98304`) with ~367k tokens of KV headroom. See [Local RTX 5090 box](#local-rtx-5090-box). |
 
 On the 4090 quant choice: no cpatonn AWQ exists for this model, and Unsloth's
 vLLM-compatible quants are NVFP4 (Blackwell-only) and GGUF (weak vLLM
@@ -89,6 +90,38 @@ support). cyankiwi's AWQ-INT4 (385k downloads) is the de-facto community AWQ.
 Note it is packaged in **compressed-tensors** format, not classic AWQ — do
 NOT pass `--quantization awq_marlin` (vLLM rejects the mismatch and
 crash-loops); let vLLM auto-detect from the model config.
+
+## Local RTX 5090 box
+
+The same stack runs on a local Blackwell workstation (RTX 5090 32GB + Ryzen 9
+9950X + 128GB — a near clone of the rented vast.ai 5090/9950X it was migrated
+from). `deploy/native-setup.sh` is host-agnostic; you do not need vast.ai for a
+local box. On a fresh Ubuntu 24.04 machine with the NVIDIA driver (>=570, for
+CUDA 13) installed:
+
+```bash
+sudo mkdir -p /workspace/stack && sudo chown -R "$USER" /workspace
+cp -r deploy/native-setup.sh services/pdf-renderer services/privacy-pipeline /workspace/stack/
+cp deploy/.env.example /workspace/stack/.env
+cat deploy/profiles/rtx5090-32gb.env >> /workspace/stack/.env   # model settings
+# fill VLLM_API_KEY, WEBUI_SECRET_KEY, TAVILY_API_KEY, HF_TOKEN, ANTHROPIC_API_KEY
+bash /workspace/stack/native-setup.sh
+```
+
+`native-setup.sh` auto-detects the Blackwell GPU (`compute_cap >= 120`) and:
+
+- installs **`cuda-toolkit-13-0`** so FlashInfer can JIT-compile its SM 12.0
+  kernels — vLLM hard-requires FlashInfer for the Qwen3.8 GDN hybrid-attention
+  model, and a CUDA < 12.9 toolchain dies with *"SM 12.x requires CUDA >= 12.9"*
+  (a stock CUDA 12.8 image is not enough). It then points the vLLM launcher at
+  `/usr/local/cuda-13.0` (`CUDA_HOME`, `TORCH_CUDA_ARCH_LIST=12.0`). First boot
+  JIT-compiles the kernels (~2 min), then caches them.
+- builds four Python 3.12 venvs (`vllm`, `webui`, `pdf`, `pipeline`), downloads
+  Qdrant, and starts all six services under restart-loop supervisors.
+
+The first `vllm` boot downloads the ~18GB model; follow `/workspace/logs/vllm.log`.
+A local box has no vast port mapping, so bind Open WebUI where you want and
+front it with your own TLS/reverse proxy if exposing it beyond localhost.
 
 ## Exposure
 
@@ -113,6 +146,60 @@ Live numbers from the 2026-08-22 deployment search (verified DC hosts,
 | A100 80GB SXM | $1.04/hr | ~$0.03/hr | **~$1.07/hr** |
 
 Plus bandwidth; the ~29GB initial download is billed on some hosts.
+
+## Privacy sandwich (services/privacy-pipeline)
+
+A "sandwich" RAG pipeline that lets a frontier model answer over a private
+corpus **without the private text ever leaving the box**. Two loopback services
+plus Qdrant, all wired into Open WebUI as an extra model. Everything except the
+frontier hop runs locally; the pipeline's ML (BGE-M3 embeddings, Presidio NER,
+LLM-Guard scanners) runs on **CPU** (its torch predates Blackwell, and the
+corpus is small), so `run-sanitizer.sh` / `run-pipeline.sh` set
+`CUDA_VISIBLE_DEVICES=""` — the GPU stays dedicated to vLLM.
+
+Components (`native-setup.sh` provisions all of them from
+`services/privacy-pipeline/requirements.txt`, pinned incl. `en_core_web_lg`):
+
+| Piece | Port | Role |
+|---|---|---|
+| **Qdrant** | 6333/6334 | vector DB, collection `meridian` (BGE-M3, 1024-dim cosine) |
+| **sanitizer** | 8091 | Presidio (spaCy `en_core_web_lg`) + HK gazetteer → PII scrub + reversible session map |
+| **pipeline** | 8092 | the sandwich orchestrator; OpenAI-compatible `/v1` shim so Open WebUI lists it as **Meridian-Hybrid** |
+
+The `/ask` (and `/v1/chat/completions`) flow, per `pipeline.py`:
+
+1. RAG-retrieve top-k chunks from Qdrant (doc-id metadata kept)
+2. **sanitize** question + retrieved context via the sanitizer (:8091)
+3. **frontier call** — Anthropic `claude-sonnet-4-6`; the exact outbound payload
+   is logged *before* it is sent. Falls back to the local vLLM (labeled) if
+   `ANTHROPIC_API_KEY` is unset — so it runs fully offline too.
+4. **rehydrate** the sanitized placeholders via the session map
+5. **enrich** locally: the local model injects corpus figures, every fact cited
+   `[doc-id]`; uncited additions are dropped
+6. **gates**: orphan scan, per-citation faithfulness (local judge, ≥0.8),
+   LLM-Guard output scan — failures flag the reply `REVIEW`
+7. full hop-by-hop JSONL trace to `/workspace/traces/` (viewer at `GET /traces`)
+
+Setup / operation:
+
+```bash
+# 1. drop your corpus as .txt files (one doc per file) into:
+/workspace/corpus/docs/
+
+# 2. embed it into Qdrant (BGE-M3 on CPU; downloads the model on first run):
+HF_HOME=/workspace/hf-cache \
+  /workspace/venvs/pipeline/bin/python /workspace/stack/privacy-pipeline/ingest.py
+
+# 3. the frontier hop needs a key in /workspace/stack/.env (else it stays local):
+ANTHROPIC_API_KEY=sk-ant-...
+
+# 4. in Open WebUI, pick the "Meridian-Hybrid" model (auto-registered via the
+#    pipeline's OpenAI shim) and chat — traces land in /workspace/traces/.
+```
+
+Migrating an existing corpus/index between boxes: copy `/workspace/corpus`,
+`/workspace/qdrant`, and `/workspace/traces` — the Qdrant collection carries the
+embeddings, so you skip re-ingesting.
 
 ## PDF rendering (services/pdf-renderer)
 

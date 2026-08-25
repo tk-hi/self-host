@@ -10,7 +10,27 @@ cd /workspace/stack
 set -a; . ./.env; set +a
 
 export HF_HOME="${HF_CACHE_DIR:-/workspace/hf-cache}"
-mkdir -p "$HF_HOME" /workspace/webui-data /workspace/logs
+# Some base images (e.g. cuda-12.8.1-auto) do not pre-create /workspace.
+mkdir -p /workspace/stack "$HF_HOME" /workspace/webui-data /workspace/logs \
+  /workspace/corpus/docs /workspace/traces /workspace/outputs/pdfs
+
+# --- Blackwell (RTX 5090 / SM 12.x) needs a CUDA >= 12.9 toolkit -----------
+# vLLM hard-requires FlashInfer for the Qwen3.8 GDN model, and FlashInfer
+# JIT-compiles its sm_120 kernels with the system nvcc. A CUDA 12.8 image
+# fails with "SM 12.x requires CUDA >= 12.9". Install cuda-toolkit-13-0 and
+# expose it to the vLLM launcher below via CUDA_HOME/TORCH_CUDA_ARCH_LIST.
+CUDA_EXTRA_ENV=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+  CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
+  if [ "${CAP:-0}" -ge 120 ] && [ ! -x /usr/local/cuda-13.0/bin/nvcc ]; then
+    echo "==> Blackwell GPU (compute_cap ${CAP}) detected; installing cuda-toolkit-13-0"
+    apt-get update -qq
+    apt-get install -y -qq cuda-toolkit-13-0
+  fi
+  if [ -x /usr/local/cuda-13.0/bin/nvcc ]; then
+    CUDA_EXTRA_ENV=$'export CUDA_HOME=/usr/local/cuda-13.0\nexport PATH="$CUDA_HOME/bin:$PATH"\nexport TORCH_CUDA_ARCH_LIST="12.0"'
+  fi
+fi
 
 # uv manages the Python 3.12 both services need (base image ships 3.10).
 if ! command -v uv >/dev/null 2>&1; then
@@ -44,6 +64,35 @@ if [ ! -x /workspace/venvs/pdf/bin/uvicorn ]; then
 fi
 mkdir -p /workspace/outputs/pdfs
 
+# --- privacy-pipeline venv (presidio + spaCy + llama-index + llm-guard) ------
+# The "sandwich" services (sanitizer :8091, pipeline :8092) run on CPU: their
+# torch (2.3.1) predates Blackwell and the corpus is tiny, so embeddings/NER
+# run on CPU (run-sanitizer/run-pipeline set CUDA_VISIBLE_DEVICES=""). The
+# pinned requirements.txt reproduces the exact working set incl. en_core_web_lg.
+if [ -d /workspace/stack/privacy-pipeline ] && [ ! -x /workspace/venvs/pipeline/bin/uvicorn ]; then
+  uv venv --python 3.12 /workspace/venvs/pipeline
+  uv pip install --python /workspace/venvs/pipeline/bin/python \
+    -r /workspace/stack/privacy-pipeline/requirements.txt
+fi
+
+# --- Qdrant (vector DB for the privacy sandwich; loopback only) --------------
+if [ -d /workspace/stack/privacy-pipeline ] && [ ! -x /workspace/qdrant/qdrant ]; then
+  QVER="${QDRANT_VERSION:-1.19.0}"
+  mkdir -p /workspace/qdrant/storage
+  curl -fsSL "https://github.com/qdrant/qdrant/releases/download/v${QVER}/qdrant-x86_64-unknown-linux-gnu.tar.gz" \
+    | tar xz -C /workspace/qdrant
+fi
+if [ -x /workspace/qdrant/qdrant ]; then
+cat > /workspace/stack/run-qdrant.sh <<'LAUNCH'
+#!/usr/bin/env bash
+cd /workspace/qdrant
+export QDRANT__SERVICE__HOST=127.0.0.1 QDRANT__SERVICE__HTTP_PORT=6333
+export QDRANT__STORAGE__STORAGE_PATH=/workspace/qdrant/storage
+exec ./qdrant
+LAUNCH
+chmod +x /workspace/stack/run-qdrant.sh
+fi
+
 # --- vLLM launcher (internal only: 127.0.0.1) ------------------------------
 cat > /workspace/stack/run-vllm.sh <<LAUNCH
 #!/usr/bin/env bash
@@ -51,6 +100,7 @@ set -a; . /workspace/stack/.env; set +a
 export HF_HOME="\${HF_CACHE_DIR:-/workspace/hf-cache}"
 export HF_HUB_ENABLE_HF_TRANSFER=\${HF_TRANSFER:-1}
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+${CUDA_EXTRA_ENV}
 exec /workspace/venvs/vllm/bin/vllm serve "\${MODEL_ID}" \
   --served-model-name "\${SERVED_MODEL_NAME}" \
   --host 127.0.0.1 --port 8000 \
@@ -89,6 +139,7 @@ if [ -d /workspace/stack/privacy-pipeline ]; then
 cat > /workspace/stack/run-sanitizer.sh <<'LAUNCH'
 #!/usr/bin/env bash
 set -a; . /workspace/stack/.env; set +a
+export CUDA_VISIBLE_DEVICES=""
 cd /workspace/stack/privacy-pipeline
 export HF_HOME=/workspace/hf-cache
 exec /workspace/venvs/pipeline/bin/uvicorn sanitizer:app --host 127.0.0.1 --port 8091
@@ -96,6 +147,7 @@ LAUNCH
 cat > /workspace/stack/run-pipeline.sh <<'LAUNCH'
 #!/usr/bin/env bash
 set -a; . /workspace/stack/.env; set +a
+export CUDA_VISIBLE_DEVICES=""
 cd /workspace/stack/privacy-pipeline
 export HF_HOME=/workspace/hf-cache
 exec /workspace/venvs/pipeline/bin/uvicorn pipeline:app --host 127.0.0.1 --port 8092
