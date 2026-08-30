@@ -83,6 +83,7 @@ recommends for this family.
 | `rtx4090-24gb.env` | RTX 4090 24GB | `cyankiwi/Qwen3.8-27B-AWQ-INT4` | ~21GB AWQ 4-bit + fp8 KV + `--language-model-only`. Fits 64k with a thin margin. |
 | `rtx4090-24gb-safe.env` | RTX 4090 24GB | `Qwen/Qwen3.5-27B-GPTQ-Int4` | Official quant of the previous-gen 27B (~17GB). Comfortable fallback. |
 | `rtx5090-32gb.env` | RTX 5090 32GB | `philbert440/Qwen3.8-27B-…-W4A16-AWQ` | Blackwell. Same 18GiB AWQ weights as the 4090 uncensored profile, but 32GB lifts context to 96k (`MAX_MODEL_LEN=98304`) with ~367k tokens of KV headroom. See [Local RTX 5090 box](#local-rtx-5090-box). |
+| `rtx-pro6000-96gb.env` | RTX PRO 6000 96GB | `philbert440/Qwen3.8-27B-…-W4A16-AWQ` | Blackwell workstation. Same weights as the 5090 profile (parallel test stacks), native 256k context (`MAX_MODEL_LEN=262144`), CUDA graphs on (no `--enforce-eager`). |
 
 On the 4090 quant choice: no cpatonn AWQ exists for this model, and Unsloth's
 vLLM-compatible quants are NVFP4 (Blackwell-only) and GGUF (weak vLLM

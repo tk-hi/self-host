@@ -79,7 +79,9 @@ fi
 if [ -d /workspace/stack/privacy-pipeline ] && [ ! -x /workspace/qdrant/qdrant ]; then
   QVER="${QDRANT_VERSION:-1.19.0}"
   mkdir -p /workspace/qdrant/storage
-  curl -fsSL "https://github.com/qdrant/qdrant/releases/download/v${QVER}/qdrant-x86_64-unknown-linux-gnu.tar.gz" \
+  # musl (static) build — the gnu build needs GLIBC >= 2.38 and crash-loops
+  # on Ubuntu 22.04 images (bitten twice now: first deploy and the PRO 6000).
+  curl -fsSL "https://github.com/qdrant/qdrant/releases/download/v${QVER}/qdrant-x86_64-unknown-linux-musl.tar.gz" \
     | tar xz -C /workspace/qdrant
 fi
 if [ -x /workspace/qdrant/qdrant ]; then
